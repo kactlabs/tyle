@@ -16,7 +16,7 @@ classifiers = [
 ]
 
 [project.urls]
-Documentation = "https://csp.gitbook.io/genai/foss/tile"
+Documentation = "https://csp.gitbook.io/genai/foss/tyle"
 
 [tool.setuptools]
 packages = ["tyle"]

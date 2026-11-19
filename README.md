@@ -1,7 +1,7 @@
 # tyle
 
 TYLE (Tiled Inference Layout Encoding): a CPU-native, single-file model format for local LLM inference.
-Spec: https://csp.gitbook.io/genai/foss/tile
+Spec: https://csp.gitbook.io/genai/foss/tyle
 
 ## Status
 
@@ -19,7 +19,12 @@ Basic container implemented per spec v0.2 draft:
   tuning parameters stored as `lut.*`. `tyle.lut_view` reshapes a loaded tensor to the kernel layout
   and rejects a tuning mismatch.
 
-Not implemented yet: kernels, AMX packing (payloads are stored as given), sparsity block.
+- AMX q8_0 packing (spec §4.4): `tyle.quantize_q8_0` (ggml reference quantizer) and `tyle.pack_amx_q8_0`
+  port llama.cpp `pack_B<block_q8_0>`. `tyle.make_amx_q8_0_tensor` builds the tensor (`amx.*` parameters
+  stored), `tyle.amx_q8_0_view` returns the `(N/16, K/32, 608)` tile grid. Each 608-byte tile holds
+  512 B of VNNI-interleaved int8 quants, 16 fp16 scales and 16 int32 s8s8 compensation values.
+
+Not implemented yet: kernels, other AMX source quants (q4_0, q4_K, ...), sparsity block.
 Per-tensor parameters (e.g. `lut.bits`, `amx.source_quant`) go in `Tensor.extras` and are stored in the
 metadata block as `tensor.<name>.<key>`.
 
@@ -61,6 +66,14 @@ packed = tyle.lut_view(tyle.load("model.tyle").tensor("blk.0.attn_q"), expected=
 
 Shapes must satisfy: `K % g == 0`, `(K//g) % kfactor == 0`, `(M*bits) % bm == 0`.
 The packed layout is only valid for the tuning it was built with.
+
+### AMX q8_0 tensors
+
+```python
+qs, d = tyle.quantize_q8_0(weights)          # weights: float (N, K), N % 16 == 0, K % 32 == 0
+tensor = tyle.make_amx_q8_0_tensor("blk.0.ffn_up", qs, d)
+tiles = tyle.amx_q8_0_view(tyle.load("model.tyle").tensor("blk.0.ffn_up"))
+```
 
 ## Install
 
