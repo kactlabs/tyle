@@ -27,32 +27,35 @@ Progress against the spec (v0.2 draft): https://csp.gitbook.io/genai/foss/tyle
    works on any CPU. `tyle.pack_amx(quant, blocks, n, k)` takes raw ggml blocks (as in a GGUF tensor) and
    returns the `(N/16, K/block_k, tile_bytes)` grid; `tyle.make_amx_tensor` and `tyle.amx_view` wrap it.
    The reference files `mmq_ref.cpp` and `ggml_common_ref.h` from llama.cpp are kept in `tyle/src/`.
-   Checked so far: `q8_0` equals the Python packer, `q4_0` equals an independent numpy statement of the
-   layout, and all seven tile sizes equal llama.cpp's `get_tile_size`. The `q4_1`, K-quant and `iq4_xs`
-   layouts are ported from the source but not yet compared byte for byte with llama.cpp output.
+   Verified byte for byte against llama.cpp's own `pack_B` code for all seven quants (see item 5).
+5. **Byte-exact check against llama.cpp (§4.4):** `tools/verify_llamacpp.py` cuts the packing code out of
+   `tyle/src/mmq_ref.cpp` verbatim, compiles it with `tyle/src/verify_llamacpp.cpp` against
+   [SIMDe](https://github.com/simd-everywhere/simde) (which provides the AVX2/AVX-512 intrinsics on any CPU,
+   so it runs on arm64), packs random ggml blocks with both implementations and compares the bytes.
+   Result: all seven quants match at three sizes each, and the tile sizes equal llama.cpp's `get_tile_size`.
+   Run it with `python tools/verify_llamacpp.py` after `pip install -e .`. It needs `clang++` and `git`
+   (it clones SIMDe into `build/simde`, or set `SIMDE_DIR`). The harness is not part of the wheel build.
+   It checks the packing code under SIMDe's emulation, not on real AVX-512 or AMX hardware.
 
 Per-tensor parameters (e.g. `lut.bits`, `amx.source_quant`) go in `Tensor.extras` and are stored in the
 metadata block as `tensor.<name>.<key>`.
 
 ### Not Yet
 
-1. **Byte-exact check of the other quants:** compare `q4_1`, `q4_K`, `q5_K`, `q6_K` and `iq4_xs` against
-   output of llama.cpp's own `pack_B`. That needs an x86 machine with AVX-512, because `mmq_ref.cpp`
-   cannot be compiled on arm64.
-2. **Encodings and layouts without a packer (§4.1, §4.2):** `GROUPWISE`, `CODEBOOK` and `SIMD_BLOCKED`
+1. **Encodings and layouts without a packer (§4.1, §4.2):** `GROUPWISE`, `CODEBOOK` and `SIMD_BLOCKED`
    exist only as enum values.
-3. **Activation-sparsity block (open item 6):** `HAS_SPARSITY` is reserved in the spec but not specified.
+2. **Activation-sparsity block (open item 6):** `HAS_SPARSITY` is reserved in the spec but not specified.
    The reader accepts the flag and ignores any block.
-4. **GPU repack (§8, open item 5):** `gpu_offload_score` is stored, but the writer never sets
+3. **GPU repack (§8, open item 5):** `gpu_offload_score` is stored, but the writer never sets
    `GPU_REPACK_HINT`. The single-layout vs dual-layout decision is open.
-5. **Alignment policy (open item 7):** tensor data starts on a 4096-byte page and tensors inside it are
+4. **Alignment policy (open item 7):** tensor data starts on a 4096-byte page and tensors inside it are
    64-byte aligned. There is no 2 MB huge-page or straddle-avoidance logic.
-6. **Versioning rules (open item 8):** the reader rejects a different major version only. Unknown
+5. **Versioning rules (open item 8):** the reader rejects a different major version only. Unknown
    `encoding` or `tile_layout` values are not handled.
-7. **Kernels (outside the format):** nothing runs LUT or AMX matmuls, so no model output has been checked.
+6. **Kernels (outside the format):** nothing runs LUT or AMX matmuls, so no model output has been checked.
    The AMX packing was never run on AMX hardware.
-8. **Converter (outside the format):** nothing turns a HF or GGUF model into `.tyle` yet.
-9. **Spec sync:** the LUT scales go in a separate `<name>.scales` tensor, and `lut.biased_uint` and
+7. **Converter (outside the format):** nothing turns a HF or GGUF model into `.tyle` yet.
+8. **Spec sync:** the LUT scales go in a separate `<name>.scales` tensor, and `lut.biased_uint` and
    `lut.scales_tensor` are extra keys. They need to be added to spec §4.3 or removed.
 
 Not in the spec:
