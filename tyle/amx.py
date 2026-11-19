@@ -93,6 +93,77 @@ def make_amx_q8_0_tensor(
     )
 
 
+def amx_quants() -> Tuple[str, ...]:
+    """AMX source quants the native packer supports."""
+    return _native().quants()
+
+
+def _native():
+    try:
+        from . import _amxpack
+    except ImportError as e:  # not built
+        raise ImportError(
+            "tyle._amxpack is not built; install the package (pip install -e .) to compile tyle/src/tyle_pack.cpp"
+        ) from e
+    return _amxpack
+
+
+def pack_amx(quant: str, blocks, n: int, k: int) -> np.ndarray:
+    """Pack raw ggml blocks into AMX tiles with the native packer (port of llama.cpp mmq.cpp).
+
+    `blocks` holds N rows of K/block_k ggml blocks, exactly as in a GGUF tensor.
+    Returns uint8 (N/16, K/block_k, tile_bytes), the layout llama.cpp's AMX kernels consume.
+    """
+    mod = _native()
+    block_k, _block_bytes, tile_bytes = mod.info(quant)
+    raw = mod.pack(quant, np.ascontiguousarray(blocks).tobytes() if isinstance(blocks, np.ndarray) else blocks, n, k)
+    return np.frombuffer(raw, dtype=np.uint8).reshape(n // TILE_N, k // block_k, tile_bytes)
+
+
+def make_amx_tensor(
+    name: str,
+    quant: str,
+    blocks,
+    n: int,
+    k: int,
+    exec_order_index: int = 0,
+    gpu_offload_score: int = 0,
+) -> Tensor:
+    """Build a TYLE tensor with AMX-packed weights of any supported source quant. `dims` is (N, K)."""
+    block_k, _bb, _tb = _native().info(quant)
+    packed = pack_amx(quant, blocks, n, k)
+    return Tensor(
+        name=name, dims=(n, k), data=packed, encoding=C.ENC_AMX_INT8, quant_bits=_QUANT_BITS[quant],
+        tile_layout=C.LAYOUT_AMX_TILE, exec_order_index=exec_order_index,
+        gpu_offload_score=gpu_offload_score,
+        extras={
+            "amx.tile_n": TILE_N,
+            "amx.tile_k": TILE_K,
+            "amx.vnni_blk": VNNI_BLK,
+            "amx.source_quant": quant,
+            "amx.block_k": block_k,
+            "amx.has_compensation": quant == "q8_0",
+        },
+    )
+
+
+def amx_view(t: Tensor) -> np.ndarray:
+    """Reshape a loaded AMX tensor to (NB, KB, tile_bytes), zero-copy."""
+    if t.encoding != C.ENC_AMX_INT8:
+        raise ValueError(f"tensor {t.name!r} is not AMX-encoded")
+    quant = t.extras.get("amx.source_quant")
+    block_k, _bb, tile_bytes = _native().info(quant)
+    if (t.extras.get("amx.tile_n"), t.extras.get("amx.tile_k"), t.extras.get("amx.vnni_blk")) != (
+        TILE_N, TILE_K, VNNI_BLK,
+    ):
+        raise ValueError(f"tensor {t.name!r} was packed with a different tile geometry")
+    n, k = t.dims
+    return np.asarray(t.data).reshape(n // TILE_N, k // block_k, tile_bytes)
+
+
+_QUANT_BITS = {"q4_0": 4, "q4_1": 4, "q8_0": 8, "q4_K": 4, "q5_K": 5, "q6_K": 6, "iq4_xs": 4}
+
+
 def amx_q8_0_view(t: Tensor) -> np.ndarray:
     """Reshape a loaded AMX q8_0 tensor to (NB, KB, TILE_BYTES), zero-copy."""
     if t.encoding != C.ENC_AMX_INT8 or t.extras.get("amx.source_quant") != "q8_0":

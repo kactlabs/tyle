@@ -21,13 +21,24 @@ Progress against the spec (v0.2 draft): https://csp.gitbook.io/genai/foss/tyle
    `tyle.amx_q8_0_view` returns the `(N/16, K/32, 608)` tile grid. Each 608-byte tile holds 512 B of
    VNNI-interleaved int8 quants, 16 fp16 scales and 16 int32 s8s8 compensation values.
 
+4. **AMX packing for all source quants (§4.4):** `tyle/src/tyle_pack.cpp` is a portable scalar C++ port of
+   llama.cpp `mmq.cpp` (`pack_qs`, `pack_B`, `s8s8_compensation`, `convert_B_packed_format`) for `q4_0`,
+   `q4_1`, `q8_0`, `q4_K`, `q5_K`, `q6_K` and `iq4_xs`. It is built as the extension `tyle._amxpack` and
+   works on any CPU. `tyle.pack_amx(quant, blocks, n, k)` takes raw ggml blocks (as in a GGUF tensor) and
+   returns the `(N/16, K/block_k, tile_bytes)` grid; `tyle.make_amx_tensor` and `tyle.amx_view` wrap it.
+   The reference files `mmq_ref.cpp` and `ggml_common_ref.h` from llama.cpp are kept in `tyle/src/`.
+   Checked so far: `q8_0` equals the Python packer, `q4_0` equals an independent numpy statement of the
+   layout, and all seven tile sizes equal llama.cpp's `get_tile_size`. The `q4_1`, K-quant and `iq4_xs`
+   layouts are ported from the source but not yet compared byte for byte with llama.cpp output.
+
 Per-tensor parameters (e.g. `lut.bits`, `amx.source_quant`) go in `Tensor.extras` and are stored in the
 metadata block as `tensor.<name>.<key>`.
 
 ### Not Yet
 
-1. **Other AMX source quants (§4.4, open item 4):** `q4_0`, `q4_1`, `q4_K`, `q5_K`, `q6_K` and `iq4_xs`
-   each have their own `pack_B` layout in llama.cpp. Only `q8_0` is done.
+1. **Byte-exact check of the other quants:** compare `q4_1`, `q4_K`, `q5_K`, `q6_K` and `iq4_xs` against
+   output of llama.cpp's own `pack_B`. That needs an x86 machine with AVX-512, because `mmq_ref.cpp`
+   cannot be compiled on arm64.
 2. **Encodings and layouts without a packer (§4.1, §4.2):** `GROUPWISE`, `CODEBOOK` and `SIMD_BLOCKED`
    exist only as enum values.
 3. **Activation-sparsity block (open item 6):** `HAS_SPARSITY` is reserved in the spec but not specified.
@@ -39,7 +50,7 @@ metadata block as `tensor.<name>.<key>`.
 6. **Versioning rules (open item 8):** the reader rejects a different major version only. Unknown
    `encoding` or `tile_layout` values are not handled.
 7. **Kernels (outside the format):** nothing runs LUT or AMX matmuls, so no model output has been checked.
-   The AMX packing was compared against an emulation of llama.cpp's code, not run on AMX hardware.
+   The AMX packing was never run on AMX hardware.
 8. **Converter (outside the format):** nothing turns a HF or GGUF model into `.tyle` yet.
 9. **Spec sync:** the LUT scales go in a separate `<name>.scales` tensor, and `lut.biased_uint` and
    `lut.scales_tensor` are extra keys. They need to be added to spec §4.3 or removed.
@@ -96,8 +107,19 @@ tensor = tyle.make_amx_q8_0_tensor("blk.0.ffn_up", qs, d)
 tiles = tyle.amx_q8_0_view(tyle.load("model.tyle").tensor("blk.0.ffn_up"))
 ```
 
+### AMX tensors for any source quant
+
+```python
+# blocks: raw ggml blocks, N rows of K/block_k blocks (e.g. the bytes of a GGUF q4_K tensor)
+tensor = tyle.make_amx_tensor("blk.0.ffn_up", "q4_K", blocks, n=N, k=K)
+tiles = tyle.amx_view(tyle.load("model.tyle").tensor("blk.0.ffn_up"))
+```
+
 ## Install
+
+The AMX packer is C++ (`tyle/src/tyle_pack.cpp`), so installing from source needs a C++ compiler.
 
 ```
 /opt/miniconda3/envs/test12/bin/pip install -r requirements.txt
+/opt/miniconda3/envs/test12/bin/pip install -e .
 ```
