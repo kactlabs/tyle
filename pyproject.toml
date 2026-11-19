@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tyle"
+version = "0.1.0"
+description = "TYLE (Tiled Inference Layout Encoding): a CPU-native single-file model format for local LLM inference."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy"]
+keywords = ["llm", "inference", "model-format", "cpu", "quantization"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Documentation = "https://csp.gitbook.io/genai/foss/tile"
+
+[tool.setuptools]
+packages = ["tyle"]
