@@ -20,3 +20,6 @@ Documentation = "https://csp.gitbook.io/genai/foss/tyle"
 
 [tool.setuptools]
 packages = ["tyle"]
+
+[tool.setuptools.package-data]
+tyle = ["src/*.cpp", "src/*.h"]
